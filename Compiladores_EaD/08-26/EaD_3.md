@@ -23,12 +23,11 @@
 ### 10. Qual tipo de software tradutor deve ser utilizado para programas em geral, quando a velocidade de execução é uma exigência de alta prioridade?
 ### (a)Compiladores
 ### (b)Interpretadores
-### (c) Tradutores híbridos
+### (c)Tradutores híbridos
 ### (d)Macro processadores
-### (e) Interpretadores de macro instruções
+### (e)Interpretadores de macro instruções
 
 ### 11. Um vendedor de artigos de pesca obteve com um amigo o código executável (já compilado) de um programa que gerencia vendas e faz o controle de estoque, com o intuito de usálo em sua loja. Segundo o seu amigo, o referido programa foi compilado em seu sistema computacional pessoal (sistema A) e funciona corretamente. O vendedor constatou que o programa executável também funciona corretamente no sistema computacional de sua loja (sistema B). Considerando a situação relatada, analise as afirmações a seguir.
-
 ### I. Os computadores poderiam ter quantidades diferentes de núcleos (cores).
 ### II. As chamadas ao sistema (system call) do sistema operacional no sistema A devem ser compatíveis com as do sistema B.
 ### III. O conjunto de instruções do sistema A poderia ser diferente do conjunto de instruções do sistema B.
