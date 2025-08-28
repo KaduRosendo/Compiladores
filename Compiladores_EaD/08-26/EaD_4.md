@@ -4,7 +4,17 @@
 
 ### 1. Qual é a diferença entre um compilador e um interpretador ?
 
+R: 
+
+O compilador traduz o programa inteiro e retorna um arquivo executavel, já o interpretador executa o programa enquanto traduz, linha por linha  
+
 ### 2. Quais são as vantagens de (a) um compilador em relação a um interpretador e (b) um interpretador em relação a um compilador?
+
+R: 
+
+(a) Velocidade de execução, como já traduz tudo antes, o programa roda mais rápido. Otimização, compiladores fazem ajustes que deixam o programa mais eficiente.
+
+(b) Facilita depuração, porque você pode executar linha por linha e ver onde esta o erro. Rapidez no teste, não precisa compilar tudo, pois roda o código apos escrever.
 
 ### 3. Que vantagens existem em um sistema de processamento de linguagem no qual o compilador produz linguagem simbólica em vez de linguagem de máquina?
 
