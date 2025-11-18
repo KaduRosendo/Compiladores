@@ -7,6 +7,9 @@ João Rocha Murgel - 10410293
 /*
 Para compilar no vscode use:
 gcc compilador.c -Wall -Og -g -o compilador
+
+Para executar use:
+./compilador nome_do_arquivo.mp
 */
 
 #include <stdio.h>
@@ -74,8 +77,7 @@ void gera(const char *fmt, ...) {
 }
 
 
-
-// TABELA DE SIMBOLOS – Lista Encadeada
+// TABELA DE SIMBOLOS 
 typedef struct _TNo {
     char ID[16];
     int endereco;
@@ -224,7 +226,6 @@ int main(int num_argumentos, char **argumentos) {
 }
 
 // Analisador Léxico
-
 TInfoAtomo obter_atomo() {
     TInfoAtomo info_atomo;
     memset(&info_atomo, 0, sizeof(TInfoAtomo));
@@ -410,7 +411,6 @@ TInfoAtomo reconhece_comentario_chaves() {
 }
 
 // Analisador Sintático
-
 void erro_sintatico(TAtomo esperado) {
     printf("\n# ERRO SINTATICO na linha %d: Esperado '%s', mas encontrado '%s'\n", lookahead.linha, strAtomo[esperado], strAtomo[lookahead.atomo]);
     if (inicio_buffer) free(inicio_buffer);
@@ -490,14 +490,12 @@ void procedure_declaration_part() {
     consome(PROCEDURE);
     consome(IDENTIFICADOR);
 
-    // Parte opcional de parâmetros: [ ( <parameter_list> ) ]
     if (lookahead.atomo == ABRE_PARENTESES) {
         consome(ABRE_PARENTESES);
 
         if (lookahead.atomo == VAR) {
             parameter_list();
 
-            // Permitir mais parâmetros separados por '; var ...'
             while (lookahead.atomo == PONTO_VIRGULA) {
                 consome(PONTO_VIRGULA);
                 parameter_list();
@@ -549,11 +547,10 @@ void variable_declaration() {
 
     consome(DOIS_PONTOS);
 
-    // Agora vamos definir o tipo como string padronizada
     char tipo[8] = "";
 
     if (lookahead.atomo == INTEGER) {
-        strcpy(tipo, "integer");   // ✅ strcpy TEM 2 argumentos
+        strcpy(tipo, "integer");
     } else if (lookahead.atomo == BOOLEAN) {
         strcpy(tipo, "boolean");
     } else {
@@ -563,7 +560,7 @@ void variable_declaration() {
     // Consome o tipo (INTEGER ou BOOLEAN)
     type();
 
-    // Insere todos os identificadores na tabela de símbolos
+    // Insere os identificadores na tabela de símbolos
     for (int i = 0; i < qtd_ids; i++) {
         inserir_variavel(nomes[i], tipo);
     }
@@ -604,7 +601,7 @@ void statement() {
         case IF: if_statement(); break;
         case WHILE: while_statement(); break;
         case WRITE: write_statement(); break;
-        case BEGIN: statement_part(); break; // Bloco aninhado
+        case BEGIN: statement_part(); break;
         default:
             if (lookahead.atomo != END) {
                 erro_geral("Comando invalido.");
@@ -616,17 +613,17 @@ void statement() {
 void assignment_statement() {
     char nome[16];
 
-    // Guarda o nome da variável que está sendo atribuída
+    // Guarda o nome da variável
     strncpy(nome, lookahead.lexema, 15);
     nome[15] = '\0';
 
-    // Verifica se essa variável foi declarada e obtém o tipo
+    // Verifica se variável foi declarada e o tipo
     char *tipoVar = tipo_variavel(nome);
 
     consome(IDENTIFICADOR);
     consome(ATRIBUICAO);
 
-    // Agora avaliamos a expressão e pegamos o tipo dela
+    // Tipo da expressão
     char *tipoExpr = expression();
 
     // Checagem de tipos
@@ -636,8 +633,7 @@ void assignment_statement() {
         exit(1);
     }
 
-    // GERAÇÃO DE CÓDIGO: o resultado da expressão está no topo da pilha
-    // Armazena na variável 'nome'
+    // GERAÇÃO DE CÓDIGO
     gera("STO %s", nome);
 }
 
@@ -656,7 +652,7 @@ void if_statement() {
     int rotulo_falso = proximo_rotulo();
     int rotulo_fim = -1;
 
-    // Se condição for falsa (0), desvia para Lfalso
+    // (0) para Lfalso
     gera("JZ L%d", rotulo_falso);
 
     consome(THEN);
@@ -664,19 +660,14 @@ void if_statement() {
 
     if (lookahead.atomo == ELSE) {
         rotulo_fim = proximo_rotulo();
-        // sai do if para depois do else
         gera("JMP L%d", rotulo_fim);
-
-        // marca o início do bloco ELSE
         gera("L%d:", rotulo_falso);
 
         consome(ELSE);
         statement();
 
-        // fim do IF-ELSE
         gera("L%d:", rotulo_fim);
     } else {
-        // IF sem ELSE: marca só o rótulo falso
         gera("L%d:", rotulo_falso);
     }
 }
@@ -699,16 +690,16 @@ void while_statement() {
         exit(1);
     }
 
-    // se condição falsa, sai do laço
+    // se falso, sai do laço
     gera("JZ L%d", rotulo_fim);
 
     consome(DO);
     statement();
 
-    // volta para o início
+    // volta
     gera("JMP L%d", rotulo_inicio);
 
-    // fim do laço
+    // fim
     gera("L%d:", rotulo_fim);
 }
 
@@ -717,9 +708,9 @@ void while_statement() {
 void write_statement() {
     consome(WRITE);
     consome(ABRE_PARENTESES);
-    char *tipoExpr = expression(); // gera código da expressão
+    expression();  // gera código
 
-    gera("PRN");   // imprime topo da pilha
+    gera("PRN");   // imprime 
     consome(FECHA_PARENTESES);
 }
 
@@ -727,17 +718,16 @@ void write_statement() {
 char* factor() {
     switch (lookahead.atomo) {
         case IDENTIFICADOR: {
-            // Guarda o nome ANTES de consumir
+            // Guarda o nome 
             char nome[30];
             strncpy(nome, lookahead.lexema, 29);
             nome[29] = '\0';
 
-            // Verifica se a variável foi declarada e pega seu tipo
+            // Verifica variável e tipo
             char *tipo = tipo_variavel(nome);
 
             consome(IDENTIFICADOR);
 
-            // GERAÇÃO DE CÓDIGO: carrega valor da variável
             gera("LDV %s", nome);
 
             return tipo;  // "integer" ou "boolean"
@@ -749,18 +739,17 @@ char* factor() {
 
             consome(NUMERO);
 
-            // GERAÇÃO DE CÓDIGO: carrega constante
             gera("LDC %s", valor);
 
             return "integer";
         }
         case TRUE:
             consome(TRUE);
-            gera("LDC 1");   // true = 1
+            gera("LDC 1");
             return "boolean";
         case FALSE:
             consome(FALSE);
-            gera("LDC 0");   // false = 0
+            gera("LDC 0"); 
             return "boolean";
         case ABRE_PARENTESES: {
             consome(ABRE_PARENTESES);
@@ -776,12 +765,12 @@ char* factor() {
                        lookahead.linha);
                 exit(1);
             }
-            gera("NOT");  // operador unário
+            gera("NOT");
             return "boolean";
         }
         default:
             erro_geral("Fator invalido na expressao.");
-            return "integer"; // só pra evitar warning
+            return "integer"; 
     }
 }
 
@@ -796,7 +785,7 @@ char* term() {
         char *tipo2 = factor();
 
         if (op == MULT || op == DIV) {
-            // Operadores aritmeticos: exigem integer
+            // Operadores aritmeticos
             if (strcmp(tipo, "integer") != 0 || strcmp(tipo2, "integer") != 0) {
                 printf("\n# ERRO SEMANTICO na linha %d: Operador aritmetico (*) ou div exige operandos inteiros.\n",
                        lookahead.linha);
@@ -833,7 +822,7 @@ char* simple_expression() {
         char *tipo2 = term();
 
         if (op == MAIS || op == MENOS) {
-            // + e - só fazem sentido pra integer
+            // + e - 
             if (strcmp(tipo, "integer") != 0 || strcmp(tipo2, "integer") != 0) {
                 printf("\n# ERRO SEMANTICO na linha %d: Operador '+' ou '-' exige operandos inteiros.\n",
                        lookahead.linha);
@@ -878,7 +867,7 @@ char* expression() {
             exit(1);
         }
 
-        // GERAÇÃO DE CÓDIGO: compara os dois valores no topo da pilha
+        // GERAÇÃO DE CÓDIGO
         switch (op) {
             case IGUAL:        gera("EQ"); break;
             case DIFERENTE:    gera("NE"); break;
@@ -889,11 +878,11 @@ char* expression() {
             default: break;
         }
 
-        // Resultado de uma comparação é sempre boolean
+        // Resultado da comparação
         return "boolean";
     }
 
-    // Sem operador relacional, o tipo é o da expressão simples
+    // tipo é o da expressão simples
     return tipoEsq;
 }
 
