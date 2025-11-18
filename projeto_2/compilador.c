@@ -13,6 +13,7 @@ gcc compilador.c -Wall -Og -g -o compilador
 #include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h>
 
 // Definições Léxicas
 typedef enum {
@@ -48,12 +49,31 @@ char *inicio_buffer = NULL;
 TInfoAtomo lookahead;
 int contaLinha = 1;
 
+
 // Mapeamento de TAtomo para String para facilitar a depuração e erros
 char *strAtomo[] = {
     "ERROLEXICO", "FIMDEARQUIVO", "PROGRAM", "VAR", "INTEGER", "BOOLEAN", "PROCEDURE", "BEGIN", "END", "IF", "THEN", "ELSE", "WHILE", "DO",
     "WRITE", "READ", "TRUE", "FALSE", ";", ":", ".", ",", ":=", "+", "-", "*", "div", "and", "or", "not",
     "=", "<>", "<", "<=", ">", ">=", "IDENTIFICADOR", "NUMERO", "(", ")"
 };
+
+// GERAÇÃO DE CÓDIGO
+FILE *codigo = NULL;
+int rotulo_atual = 0;
+
+int proximo_rotulo() {
+    return rotulo_atual++;
+}
+
+void gera(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(codigo, fmt, ap);
+    fprintf(codigo, "\n");
+    va_end(ap);
+}
+
+
 
 // TABELA DE SIMBOLOS – Lista Encadeada
 typedef struct _TNo {
@@ -177,6 +197,13 @@ int main(int num_argumentos, char **argumentos) {
     printf("\nIniciando processo de compilacao para MiniPascal!\n\n");
     lookahead = obter_atomo();
 
+    codigo = fopen("codigo.txt", "w");
+    if (codigo == NULL) {
+    printf("Erro ao criar arquivo de codigo intermediario!\n");
+    free(inicio_buffer);
+    return 1;
+    }
+
     if (lookahead.atomo == ERROLEXICO) {
         erro_lexico();
     }
@@ -191,6 +218,7 @@ int main(int num_argumentos, char **argumentos) {
     printf("%d linhas analisadas. Programa lexica e sintaticamente correto!\n", contaLinha);
     printf("-------------------------------------------------------------------\n\n");
 
+    fclose(codigo);
     free(inicio_buffer);
     return 0;
 }
@@ -592,7 +620,7 @@ void assignment_statement() {
     strncpy(nome, lookahead.lexema, 15);
     nome[15] = '\0';
 
-    // Verifica se essa variável foi declarada
+    // Verifica se essa variável foi declarada e obtém o tipo
     char *tipoVar = tipo_variavel(nome);
 
     consome(IDENTIFICADOR);
@@ -607,8 +635,11 @@ void assignment_statement() {
                lookahead.linha, tipoVar, tipoExpr);
         exit(1);
     }
-}
 
+    // GERAÇÃO DE CÓDIGO: o resultado da expressão está no topo da pilha
+    // Armazena na variável 'nome'
+    gera("STO %s", nome);
+}
 
 
 // <if_statement> ::= if <expression> then <statement> [else <statement>]
@@ -622,17 +653,43 @@ void if_statement() {
         exit(1);
     }
 
+    int rotulo_falso = proximo_rotulo();
+    int rotulo_fim = -1;
+
+    // Se condição for falsa (0), desvia para Lfalso
+    gera("JZ L%d", rotulo_falso);
+
     consome(THEN);
     statement();
+
     if (lookahead.atomo == ELSE) {
+        rotulo_fim = proximo_rotulo();
+        // sai do if para depois do else
+        gera("JMP L%d", rotulo_fim);
+
+        // marca o início do bloco ELSE
+        gera("L%d:", rotulo_falso);
+
         consome(ELSE);
         statement();
+
+        // fim do IF-ELSE
+        gera("L%d:", rotulo_fim);
+    } else {
+        // IF sem ELSE: marca só o rótulo falso
+        gera("L%d:", rotulo_falso);
     }
 }
 
 
 // <while_statement> ::= while <expression> do <statement>
 void while_statement() {
+    int rotulo_inicio = proximo_rotulo();
+    int rotulo_fim = proximo_rotulo();
+
+    // rótulo do início do laço
+    gera("L%d:", rotulo_inicio);
+
     consome(WHILE);
     char *tipoCond = expression();
 
@@ -642,8 +699,17 @@ void while_statement() {
         exit(1);
     }
 
+    // se condição falsa, sai do laço
+    gera("JZ L%d", rotulo_fim);
+
     consome(DO);
     statement();
+
+    // volta para o início
+    gera("JMP L%d", rotulo_inicio);
+
+    // fim do laço
+    gera("L%d:", rotulo_fim);
 }
 
 
@@ -651,7 +717,9 @@ void while_statement() {
 void write_statement() {
     consome(WRITE);
     consome(ABRE_PARENTESES);
-    expression(); // write pode imprimir o resultado de uma expressão
+    char *tipoExpr = expression(); // gera código da expressão
+
+    gera("PRN");   // imprime topo da pilha
     consome(FECHA_PARENTESES);
 }
 
@@ -659,17 +727,40 @@ void write_statement() {
 char* factor() {
     switch (lookahead.atomo) {
         case IDENTIFICADOR: {
+            // Guarda o nome ANTES de consumir
+            char nome[30];
+            strncpy(nome, lookahead.lexema, 29);
+            nome[29] = '\0';
+
             // Verifica se a variável foi declarada e pega seu tipo
-            char *tipo = tipo_variavel(lookahead.lexema);
+            char *tipo = tipo_variavel(nome);
+
             consome(IDENTIFICADOR);
+
+            // GERAÇÃO DE CÓDIGO: carrega valor da variável
+            gera("LDV %s", nome);
+
             return tipo;  // "integer" ou "boolean"
         }
-        case NUMERO:
+        case NUMERO: {
+            char valor[30];
+            strncpy(valor, lookahead.lexema, 29);
+            valor[29] = '\0';
+
             consome(NUMERO);
+
+            // GERAÇÃO DE CÓDIGO: carrega constante
+            gera("LDC %s", valor);
+
             return "integer";
+        }
         case TRUE:
+            consome(TRUE);
+            gera("LDC 1");   // true = 1
+            return "boolean";
         case FALSE:
-            consome(lookahead.atomo);
+            consome(FALSE);
+            gera("LDC 0");   // false = 0
             return "boolean";
         case ABRE_PARENTESES: {
             consome(ABRE_PARENTESES);
@@ -685,6 +776,7 @@ char* factor() {
                        lookahead.linha);
                 exit(1);
             }
+            gera("NOT");  // operador unário
             return "boolean";
         }
         default:
@@ -692,6 +784,7 @@ char* factor() {
             return "integer"; // só pra evitar warning
     }
 }
+
 
 // <term> ::= <factor> { (* | div | and) <factor> }
 char* term() {
@@ -709,6 +802,11 @@ char* term() {
                        lookahead.linha);
                 exit(1);
             }
+            if (op == MULT)
+                gera("MUL");
+            else
+                gera("DIV");
+
             tipo = "integer";
         } else { // E_LOGICO (and)
             if (strcmp(tipo, "boolean") != 0 || strcmp(tipo2, "boolean") != 0) {
@@ -716,12 +814,14 @@ char* term() {
                        lookahead.linha);
                 exit(1);
             }
+            gera("AND");
             tipo = "boolean";
         }
     }
 
     return tipo;
 }
+
 
 // <simple_expression> ::= [ + | - ] <term> { (+ | - | or) <term> }
 char* simple_expression() {
@@ -739,6 +839,12 @@ char* simple_expression() {
                        lookahead.linha);
                 exit(1);
             }
+
+            if (op == MAIS)
+                gera("ADD");
+            else
+                gera("SUB");
+
             tipo = "integer";
         } else { // OU_LOGICO (or)
             if (strcmp(tipo, "boolean") != 0 || strcmp(tipo2, "boolean") != 0) {
@@ -746,12 +852,15 @@ char* simple_expression() {
                        lookahead.linha);
                 exit(1);
             }
+
+            gera("OR");
             tipo = "boolean";
         }
     }
 
     return tipo;
 }
+
 
 // <expression> ::= <simple_expression> [ <relational_operator> <simple_expression> ]
 char* expression() {
@@ -762,20 +871,32 @@ char* expression() {
         consome(op);
         char *tipoDir = simple_expression();
 
-        // Regra simples: os dois lados devem ter o MESMO tipo
+        // Os dois lados do operador relacional precisam ter o MESMO tipo
         if (strcmp(tipoEsq, tipoDir) != 0) {
             printf("\n# ERRO SEMANTICO na linha %d: Operacao relacional com tipos diferentes ('%s' e '%s').\n",
                    lookahead.linha, tipoEsq, tipoDir);
             exit(1);
         }
 
+        // GERAÇÃO DE CÓDIGO: compara os dois valores no topo da pilha
+        switch (op) {
+            case IGUAL:        gera("EQ"); break;
+            case DIFERENTE:    gera("NE"); break;
+            case MENOR:        gera("LT"); break;
+            case MENOR_IGUAL:  gera("LE"); break;
+            case MAIOR:        gera("GT"); break;
+            case MAIOR_IGUAL:  gera("GE"); break;
+            default: break;
+        }
+
         // Resultado de uma comparação é sempre boolean
         return "boolean";
     }
 
-    // Se não tiver operador relacional, o tipo da expressão é o da expressão simples
+    // Sem operador relacional, o tipo é o da expressão simples
     return tipoEsq;
 }
+
 
 // Retorna o token do operador relacional se existir
 TAtomo relational_operator() {
