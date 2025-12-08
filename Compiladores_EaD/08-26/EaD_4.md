@@ -34,6 +34,7 @@ Verifica a corretude do código de uma forma geral e depois as etapas que geram 
 R:
 
 Compiladas: C / Rust / Swift 
+
 Interpretadas: Python / JavaScript / Ruby
 
 ### 7. O que são compiladores just-in-time? De um exemplo de linguagem de programação com essa característica.
