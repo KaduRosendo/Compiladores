@@ -361,5 +361,169 @@ TInfoAtomo reconhece_id_ou_palavra_reservada(void) {
     }
 
     int tam = (int)(entrada - inicio);
-    if (tam >= (int)sizeof(info.lexema)) tam = (int)sizeof(info.lexema) - 1
+    if (tam >= (int)sizeof(info.lexema)) tam = (int)sizeof(info.lexema) - 1;
+    strncpy(info.lexema, inicio, tam);
+    info.lexema[tam] = '\0';
+
+    /*Mapeamento das palavras reservadas*/
+    if      (strcmp(info.lexema, "if") == 0) info.atomo = KW_IF;
+    else if (strcmp(info.lexema, "elif") == 0) info.atomo = KW_ELIF;
+    else if (strcmp(info.lexema, "else") == 0) info.atomo = KW_ELSE;
+    else if (strcmp(info.lexema, "while") == 0) info.atomo = KW_WHILE;
+    else if (strcmp(info.lexema, "for") == 0) info.atomo = KW_FOR;
+    else if (strcmp(info.lexema, "break") == 0) info.atomo = KW_BREAK;
+    else if (strcmp(info.lexema, "continue") == 0) info.atomo = KW_CONTINUE;
+    else if (strcmp(info.lexema, "return") == 0) info.atomo = KW_RETURN;
+    else if (strcmp(info.lexema, "def") == 0) info.atomo = KW_DEF;
+    else if (strcmp(info.lexema, "from") == 0) info.atomo = KW_FROM;
+    else if (strcmp(info.lexema, "as") == 0) info.atomo = KW_AS;
+    else if (strcmp(info.lexema, "with") == 0) info.atomo = KW_WITH;
+    else if (strcmp(info.lexema, "exec") == 0) info.atomo = KW_EXEC;
+    else if (strcmp(info.lexema, "in") == 0) info.atomo = KW_IN;
+    else if (strcmp(info.lexema, "is") == 0) info.atomo = KW_IS;
+    else if (strcmp(info.lexema, "raise") == 0) info.atomo = KW_RAISE;
+    else if (strcmp(info.lexema, "print") == 0) info.atomo = KW_PRINT;
+    else if (strcmp(info.lexema, "input") == 0) info.atomo = KW_INPUT;
+    else if (strcmp(info.lexema, "len") == 0) info.atomo = KW_LEN;
+    else if (strcmp(info.lexema, "range") == 0) info.atomo = KW_RANGE;
+    else if (strcmp(info.lexema, "True") == 0) info.atomo = KW_TRUE;
+    else if (strcmp(info.lexema, "False") == 0) info.atomo = KW_FALSE;
+    else if (strcmp(info.lexema, "and") == 0) info.atomo = KW_AND;
+    else if (strcmp(info.lexema, "or") == 0) info.atomo = KW_OR;
+    else if (strcmp(info.lexema, "not") == 0) info.atomo = KW_NOT;
+    else    info.atomo = IDENTIFICADOR;
+ 
+    return info;
 }
+
+/*
+reconhece_numero()
+Lê sequência de dígitos decimais.
+*/
+TInfoAtomo reconhece_numero(void) {
+    TInfoAtomo info;
+    memset(&info, 0, sizeof(TInfoAtomo));
+    info.linha = contaLinha;
+    info.atomo = NUMERO;
+ 
+    char *inicio = entrada;
+    while (isdigit((unsigned char)*entrada)) {
+        entrada++;
+    }
+ 
+    if (isalpha((unsigned char)*entrada) || *entrada == '_') {
+        info.atomo = ERRO_LEXICO;
+        while (isalnum((unsigned char)*entrada) || *entrada == '_') {
+            entrada++;
+        }
+        int tam = (int)(entrada - inicio);
+        if (tam > 100) tam = 100;
+        char tmp[128];
+        strncpy(tmp, inicio, tam);
+        tmp[tam] = '\0';
+        snprintf(info.lexema, sizeof(info.lexema), "ID invalido '%s'", tmp);
+        return info;
+    }
+ 
+    int tam = (int)(entrada - inicio);
+    if (tam >= (int)sizeof(info.lexema)) tam = (int)sizeof(info.lexema) - 1;
+    strncpy(info.lexema, inicio, tam);
+    info.lexema[tam] = '\0';
+    return info;
+}
+
+/*
+reconhece_string(delim)
+Lê literal string entre aspas simples ou duplas.
+*/
+TInfoAtomo reconhece_string(char delim) {
+    TInfoAtomo info;
+    memset(&info, 0, sizeof(TInfoAtomo));
+    info.linha = contaLinha;
+ 
+    entrada++; /* Pula o delimitador de abertura */
+ 
+    int idx = 0;
+    while (*entrada != '\0' && *entrada != '\n') {
+        if (*entrada == delim) {
+            entrada++; /* Pula o delimitador de fechamento */
+            info.atomo = LITERAL_STR;
+            info.lexema[idx] = '\0';
+            return info;
+        }
+        if (*entrada == '\\' && *(entrada + 1) != '\0') {
+            entrada++;
+            char esc = *entrada;
+            char c;
+            switch (esc) {
+                case 'n':  c = '\n'; break;
+                case 't':  c = '\t'; break;
+                case '\\': c = '\\'; break;
+                case '\'': c = '\''; break;
+                case '"':  c = '"';  break;
+                default:   c = esc;  break;
+            }
+            if (idx < (int)sizeof(info.lexema) - 1) info.lexema[idx++] = c;
+            entrada++;
+        } else {
+            if (idx < (int)sizeof(info.lexema) - 1)
+                info.lexema[idx++] = *entrada;
+            entrada++;
+        }
+    }
+ 
+    info.atomo = ERRO_LEXICO;
+    info.lexema[0] = '\0';
+    snprintf(info.lexema, sizeof(info.lexema),
+             "String nao fechada na linha %d", info.linha);
+    return info;
+}
+
+/*
+=====================
+Analisador Sintático
+=====================
+*/
+
+void erro_lexico(const char *msg) {
+    printf("\n# ERRO LEXICO na linha %d: %s\n", lookahead.linha, msg);
+    free(inicio_buffer);
+    exit(1);
+}
+
+void erro_sintatico(TAtomo esperado) {
+    printf("\n# ERRO SINTATICO na linha %d: Esperado '%s'. mas encontrado ''%s", lookahead.linha, strAtomo[esperado], strAtomo[lookahead.atomo]);
+    if (lookahead.atomo == IDENTIFICADOR || lookahead.atomo == NUMERO) 
+        printf(" ('%s')", lookahead.lexema);
+    printf("\n");
+    free(inicio_buffer);
+    exit(1);
+}
+
+/*
+consome(atomo)
+Verifica o lookahead, imprime e avança para o próximo token
+*/
+
+void consome(TAtomo atomo) {
+    if (lookahead.atomo == ERRO_LEXICO) {
+        erro_lexico(lookahead.lexema);
+    }
+    if (lookahead.atomo == atomo) {
+        printf("%d %s", lookahead.linha, strAtomo[lookahead.atomo]);
+        if (lookahead.atomo == IDENTIFICADOR ||
+            lookahead.atomo == NUMERO ||
+            lookahead.atomo == LITERAL_STR) {
+            printf(" | %s", lookahead.lexema);
+        }
+        printf("\n");
+        lookahead = obter_atomo();
+    } else {
+        erro_sintatico(atomo);
+    }
+}
+
+/*
+Gramática MiniPython
+*/
+
