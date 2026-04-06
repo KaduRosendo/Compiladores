@@ -1,62 +1,106 @@
-Integrantes:
+# Projeto - Compiladores: Analisador Léxico e Sintático (MiniPython)
 
-Carlos Eduardo Rosendo Basseto - 10409941
+**Integrantes:**
+* Carlos Eduardo Rosendo Basseto - 10409941
+* Vinicius Oliveira Piccazzio - 10419471
 
-João Rocha Murgel - 10410293
+## 1. Parte do Trabalho Concluída
+O projeto foi concluído atendendo às especificações das Etapas 1, 2 e 3. O analisador léxico e o sintático funcionam de forma integrada. O programa lê um código-fonte via linha de comando, gera os tokens e realiza a análise sintática validando a estrutura do código com base na gramática definida.
 
-O compilador criado realiza tanto a análise léxica quanto sintática de um arquivo de texto contendo um código na linguagem MiniPascal.
+## 2. Como Executar o Código
 
-Parte Léxica:
+Para compilar o código fonte usando o GCC, abra o terminal e execute:
+```bash
+gcc -Wall -Wno-unused-result -g -Og compilador.c -o compilador
+```
+## 3. Decisões de Design e Implementação
 
-As funções de verificação léxica foram construídas com base em autômatos para cada tipo de token. Caso a entrada não corresponda a um padrão válido da linguagem, será mostrado um erro léxico para o usuário. Além das funções para reconhecer números, identificadores e comentários, foi implementada uma lógica para agrupar caracteres que formam um único átomo, como no caso do operador de atribuição ':=', que é formado por dois caracteres distintos.
+- Gerenciamento de Memória: Todo o conteúdo do arquivo ```.mp``` é carregado para um buffer na memória de uma só vez no início da execução. Isso melhora a performance e facilita a manipulação do ponteiro de leitura no analisador léxico.
 
-Na função reconhece_id_ou_palavra_reservada e reconhece_numero, o conteúdo do lexema é armazenado no campo correspondente da struct TInfoAtomo.
-As principais funções de verificação léxica criadas no projeto são:
+- Estrutura de Tokens: Os átomos são definidos em um ```enum TAtomo``` e passados entre o léxico e o sintático através de uma struct que guarda o tipo de token, o lexema (string original) e a linha em que ocorreu.
 
-TInfoAtomo obter_atomo()
+- Parser Descendente Recursivo: O analisador sintático foi construído mapeando cada regra de produção da gramática para uma função específica no C (ex: ```comando()```, ```expressao()```). A sincronização e avanço de tokens ocorrem por meio da função central ```consome()```.
 
-TInfoAtomo reconhece_id_ou_palavra_reservada()
+## 4. Bugs ou Erros Identificados
 
-TInfoAtomo reconhece_numero()
+Não foram identificados bugs de execução (como segmentation fault) durante os testes. O compilador trata erros léxicos (ex: aspas não fechadas, caracteres não reconhecidos) e sintáticos (falta de dois pontos, estrutura fora de ordem), interrompendo a execução de forma controlada e exibindo a linha e o motivo da falha.
 
-TInfoAtomo reconhece_comentario()
+## 5. Expressões Regulares
 
-Parte Sintática:
+LETRA               -> [A-Za-z]
 
-Para a parte sintática, foram criadas funções de acordo com as regras de produção da gramática MiniPascal, fornecida no enunciado do projeto. A abordagem utilizada foi a de Análise Descendente Recursiva.
+DIGITO              -> [0-9]
 
-A função inicial é a program(), que é chamada na main e efetivamente constrói a árvore de derivação ao realizar chamadas recursivas das outras funções. Caso a sequência de átomos lida pelo analisador léxico não esteja em uma ordem válida, um erro sintático é retornado, informando o token esperado e o encontrado.
+ID                  -> [A-Za-z_][A-Za-z0-9_]*
 
-As funções de verificação sintática criadas no projeto são:
+NUM                 -> [0-9]+
 
-void program()
+STRING              -> "[^"\n]*"
 
-void block()
+BOOLEANO            -> True | False
 
-void variable_declaration_part()
+COMENTARIO          -> #[^\n]*
 
-void variable_declaration()
+OPERADOR_ARITMETICO -> + | - | ~ | * | ** | / | %
 
-void type()
+OPERADOR_RELACIONAL -> < | > | != | <> | == | <= | >=
 
-void statement_part()
+OPERADOR_LOGICO     -> and | or | not
 
-void statement()
+OPERADOR_OUT        -> in | is
 
-void assignment_statement()
+DELIMITADORES       -> ( | ) | [ | ] | { | } | , | : | . | = | ;
 
-void if_statement()
+PALAVRAS_RESERVADAS -> return | from | while | as | elif | with | else | if | break | len | input | print | exec | raise | continue | range | def | for
 
-void while_statement()
+## 6. Gramática Livre de Contexto
 
-void write_statement()
+PROGRAMA         -> LISTA_COMANDOS
 
-void expression()
+LISTA_COMANDOS   -> COMANDO LISTA_COMANDOS | ε
 
-void simple_expression()
+COMANDO          -> ATRIBUICAO | IF | WHILE | FOR | PRINT
 
-void term()
+ATRIBUICAO       -> ID = EXPRESSAO
 
-void factor()
 
-TAtomo relational_operator()
+-- Expressões --
+
+
+EXPRESSAO        -> EXPRESSAO_LOGICA
+
+EXPRESSAO_LOGICA -> EXPRESSAO_REL RESTO_LOGICO
+
+RESTO_LOGICO     -> and EXPRESSAO_REL RESTO_LOGICO | or EXPRESSAO_REL RESTO_LOGICO | ε
+
+EXPRESSAO_REL    -> EXPRESSAO_ARIT RESTO_REL
+
+RESTO_REL        -> OP_REL EXPRESSAO_ARIT | in EXPRESSAO_ARIT | is EXPRESSAO_ARIT | ε
+
+OP_REL           -> < | > | == | != | <= | >= | <>
+
+EXPRESSAO_ARIT   -> TERMO RESTO_ARIT
+
+RESTO_ARIT       -> + TERMO RESTO_ARIT | - TERMO RESTO_ARIT | ε
+
+TERMO            -> FATOR RESTO_TERMO
+
+RESTO_TERMO      -> * FATOR RESTO_TERMO | / FATOR RESTO_TERMO | % FATOR RESTO_TERMO | ** FATOR RESTO_TERMO | ε
+
+FATOR            -> ID | NUM | BOOLEANO | STRING | ( EXPRESSAO ) | not FATOR | ~ FATOR
+
+-- Comandos Estruturais --
+
+IF               -> if EXPRESSAO : COMANDO ELSE_OPC
+
+ELSE_OPC         -> else : COMANDO | ε
+
+WHILE            -> while EXPRESSAO : COMANDO
+
+FOR              -> for ID in range ( EXPRESSAO ) : COMANDO
+
+PRINT            -> print ( LISTA_EXP )
+
+LISTA_EXP        -> EXPRESSAO RESTO_LISTA
+
+RESTO_LISTA      -> , EXPRESSAO RESTO_LISTA | ε
