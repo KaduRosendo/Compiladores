@@ -1,15 +1,15 @@
 /*
 Compilador MiniPython - Analisador Léxico e Sintático
-Linguagem: MiniPython 
+Linguagem: MiniPython (subconjunto simplificado do Python)
 
 Integrantes:
 Carlos Eduardo Rosendo Basseto - 10409941
 Vinicius Oliveira Piccazzio    - 10419471
 
-Para Compilar:
+Para compilar:
 gcc -Wall -Wno-unused-result -g -Og compilador.c -o compilador
 
-Para Executar:
+Para executar:
 ./compilador arquivo.mp
 
 ============================================================
@@ -93,8 +93,8 @@ DEFINIÇÕES LÉXICAS
 */
 
 typedef enum {
-    ERRO_LEXICO,        
-    FIM_DE_ARQUIVO,     
+    ERRO_LEXICO,
+    FIM_DE_ARQUIVO,
 
     /* Palavras Reservadas */
     KW_IF,              /* if       */
@@ -174,7 +174,48 @@ typedef struct {
     TAtomo atomo;
     int    linha;
     char   lexema[256];
+    int    id_simbolo;  /* para IDENTIFICADOR: índice na tabela de símbolos */
 } TInfoAtomo;
+
+/*
+============================================================
+TABELA DE SÍMBOLOS
+Armazena cada identificador único encontrado no programa.
+Cada novo identificador recebe um ID numérico sequencial
+(1, 2, 3 ...). Se o mesmo nome aparecer novamente, reutiliza
+o mesmo ID — isso garante o comportamento case-sensitive:
+'num1', 'Num1' e 'NUM1' são entradas distintas na tabela.
+============================================================
+*/
+#define MAX_SIMBOLOS 1024
+
+typedef struct {
+    char nome[256];
+} TSimbolo;
+
+static TSimbolo tabela_simbolos[MAX_SIMBOLOS];
+static int      num_simbolos = 0;
+
+/*
+busca_ou_insere(nome)
+Retorna o ID (1-based) do identificador na tabela de símbolos.
+Se não existir, insere e retorna o novo ID.
+*/
+static int busca_ou_insere(const char *nome) {
+    int i;
+    for (i = 0; i < num_simbolos; i++) {
+        if (strcmp(tabela_simbolos[i].nome, nome) == 0)
+            return i + 1; // ID 1-based
+    }
+    if (num_simbolos >= MAX_SIMBOLOS) {
+        fprintf(stderr, "Tabela de simbolos cheia!\n");
+        exit(1);
+    }
+    strncpy(tabela_simbolos[num_simbolos].nome, nome, 255);
+    tabela_simbolos[num_simbolos].nome[255] = '\0';
+    num_simbolos++;
+    return num_simbolos; // ID do recém-inserido
+}
 
 /* Tabela de nomes dos átomos — mesma ordem da enum TAtomo */
 static const char *strAtomo[] = {
@@ -201,24 +242,40 @@ static const char *strAtomo[] = {
     "IDENTIFICADOR", "NUMERO", "LITERAL_STRING"
 };
 
-/* Variáveis globais do analisador */
-static char      *entrada       = NULL;
-static char      *inicio_buffer = NULL;
-static TInfoAtomo lookahead;
-static int        contaLinha    = 1;
+/*
+============================================================
+LISTA DE TOKENS
+O analisador léxico roda por completo primeiro, produzindo
+uma lista de todos os tokens. Só então o analisador sintático
+processa essa lista. Isso garante que todos os erros léxicos
+sejam detectados antes de qualquer erro sintático.
+============================================================
+*/
+#define MAX_TOKENS 65536
+
+static TInfoAtomo lista_tokens[MAX_TOKENS];
+static int        total_tokens  = 0; // quantos tokens foram gerados
+static int        pos_token     = 0; // posição atual na lista (usado pelo sintático)
+
+/* Variáveis globais do analisador léxico */
+static FILE *arquivo_fonte = NULL;
+static int   char_atual    = 0;   // caractere lido pelo léxico (fgetc)
+static int   contaLinha    = 1;
 
 // Funções do Analisador Léxico
-TInfoAtomo obter_atomo(void);
-TInfoAtomo reconhece_id_ou_palavra_reservada(void);
-TInfoAtomo reconhece_numero(void);
-TInfoAtomo reconhece_string(void);
-TInfoAtomo reconhece_comentario_hash(void);
+static void   proximo_char(void);
+static void   pula_espacos(void);
+TInfoAtomo    obter_atomo(void);
+TInfoAtomo    reconhece_id_ou_palavra_reservada(void);
+TInfoAtomo    reconhece_numero(void);
+TInfoAtomo    reconhece_string(void);
+TInfoAtomo    reconhece_comentario_hash(void);
 
 // Funções do Analisador Sintático
-void erro_lexico(const char *msg);
 void erro_sintatico(TAtomo esperado);
 void erro_geral(const char *msg);
 void consome(TAtomo atomo);
+TInfoAtomo token_atual(void);
 
 // Regras da gramática
 void programa(void);
@@ -260,39 +317,120 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    FILE *arquivo = fopen(argv[1], "r");
-    if (!arquivo) {
+    arquivo_fonte = fopen(argv[1], "r");
+    if (!arquivo_fonte) {
         printf("Erro ao abrir o arquivo '%s'!\n", argv[1]);
         return 1;
     }
 
-    // Lê o arquivo inteiro para um buffer em memória
-    fseek(arquivo, 0, SEEK_END);
-    long tamanho = ftell(arquivo);
-    fseek(arquivo, 0, SEEK_SET);
-
-    char *buffer = (char *)malloc(tamanho + 1);
-    if (!buffer) {
-        printf("Erro de alocacao de memoria!\n");
-        fclose(arquivo);
-        return 1;
-    }
-
-    size_t lidos = fread(buffer, 1, tamanho, arquivo);
-    buffer[lidos] = '\0';
-    fclose(arquivo);
-
-    entrada       = buffer;
-    inicio_buffer = buffer;
-
     printf("\nIniciando processo de compilacao para MiniPython!\n\n");
 
-    // Obtém o primeiro token e inicia a análise sintática
-    lookahead = obter_atomo();
+    // -------------------------------------------------------
+    // FASE 1: ANÁLISE LÉXICA COMPLETA
+    // Lê o arquivo caractere por caractere e gera todos os
+    // tokens antes de iniciar a análise sintática.
+    // -------------------------------------------------------
+    printf("[ Fase 1: Analise Lexica ]\n\n");
+
+    proximo_char(); // carrega o primeiro caractere
+    while (1) {
+        TInfoAtomo tok = obter_atomo();
+
+        if (total_tokens >= MAX_TOKENS) {
+            printf("\n# ERRO: Numero maximo de tokens (%d) excedido.\n", MAX_TOKENS);
+            fclose(arquivo_fonte);
+            return 1;
+        }
+
+        // Erro léxico: imprime e encerra imediatamente
+        if (tok.atomo == ERRO_LEXICO) {
+            printf("\n# ERRO LEXICO na linha %d: %s\n", tok.linha, tok.lexema);
+            fclose(arquivo_fonte);
+            return 1;
+        }
+
+        lista_tokens[total_tokens++] = tok;
+
+        if (tok.atomo == FIM_DE_ARQUIVO) break;
+    }
+
+    fclose(arquivo_fonte);
+
+    // Imprime todos os tokens gerados
+    for (int i = 0; i < total_tokens; i++) {
+        TInfoAtomo *t = &lista_tokens[i];
+        if (t->atomo == FIM_DE_ARQUIVO) break;
+
+        // Operadores e palavras reservadas: só linha e nome
+        // Identificadores: linha, "IDENTIFICADOR", lexema, id na tabela
+        // Números e strings: linha, classe, valor
+        // Delimitadores: linha, "DELIMITADOR", símbolo
+
+        switch (t->atomo) {
+            case IDENTIFICADOR:
+                printf("%d IDENTIFICADOR | %s | id=%d\n",
+                       t->linha, t->lexema, t->id_simbolo);
+                break;
+            case NUMERO:
+                printf("%d NUMERO | %s\n", t->linha, t->lexema);
+                break;
+            case LITERAL_STR:
+                printf("%d LITERAL_STRING | %s\n", t->linha, t->lexema);
+                break;
+            case DEL_ABRE_PAR:
+            case DEL_FECHA_PAR:
+            case DEL_ABRE_COL:
+            case DEL_FECHA_COL:
+            case DEL_ABRE_CHAVE:
+            case DEL_FECHA_CHAVE:
+            case DEL_VIRGULA:
+            case DEL_DOIS_PONTOS:
+            case DEL_PONTO:
+            case DEL_PONTO_VIRGULA:
+                printf("%d DELIMITADOR | %s\n", t->linha, strAtomo[t->atomo]);
+                break;
+            default:
+                printf("%d %s\n", t->linha, strAtomo[t->atomo]);
+                break;
+        }
+    }
+
+    // -------------------------------------------------------
+    // FASE 2: ANÁLISE SINTÁTICA
+    // Percorre a lista de tokens produzida pela fase 1.
+    // -------------------------------------------------------
+    printf("\n[ Fase 2: Analise Sintatica ]\n\n");
+
+    pos_token = 0;
     programa();
 
-    if (lookahead.atomo != FIM_DE_ARQUIVO) {
-        erro_geral("Conteudo inesperado apos o fim do programa.");
+    // Verifica se ainda sobrou algum token nao consumido
+    if (token_atual().atomo != FIM_DE_ARQUIVO) {
+        TInfoAtomo t = token_atual();
+
+        // Caso especial: numero real (ex: 0.0) - o lexico gera NUM, '.', NUM
+        // O '.' sobra apos a atribuicao ser consumida
+        if (t.atomo == DEL_PONTO) {
+            printf("\n# ERRO SINTATICO na linha %d: Numero real ('.') nao e suportado em MiniPython. "
+                   "Apenas inteiros sao permitidos.\n", t.linha);
+            return 1;
+        }
+
+        // Caso: 'elif' sem 'if' correspondente, ou 'elif' na posicao errada
+        if (t.atomo == KW_ELIF) {
+            printf("\n# ERRO SINTATICO na linha %d: 'elif' inesperado. "
+                   "'elif' so e valido imediatamente apos um bloco 'if', "
+                   "e nao faz parte da gramatica como comando independente.\n", t.linha);
+            return 1;
+        }
+
+        // Caso geral: token que nao pertence a nenhuma regra da gramatica
+        printf("\n# ERRO SINTATICO na linha %d: Token '%s'",
+               t.linha, strAtomo[t.atomo]);
+        if (t.atomo == IDENTIFICADOR || t.atomo == NUMERO)
+            printf(" ('%s')", t.lexema);
+        printf(" nao e valido neste contexto.\n");
+        return 1;
     }
 
     printf("\n-------------------------------------------------------------------\n");
@@ -300,82 +438,97 @@ int main(int argc, char **argv) {
            contaLinha);
     printf("-------------------------------------------------------------------\n\n");
 
-    free(inicio_buffer);
     return 0;
 }
 
 /*
 =================
 ANALISADOR LÉXICO
+(leitura caractere por caractere via fgetc)
 =================
 */
 
+// proximo_char() — avança um caractere no arquivo, contando linhas
+static void proximo_char(void) {
+    char_atual = fgetc(arquivo_fonte);
+    // contaLinha é incrementado quando encontramos '\n' no léxico
+}
+
+// pula_espacos() — avança enquanto o caractere atual for espaço/tab/nova linha
+static void pula_espacos(void) {
+    while (char_atual == ' '  || char_atual == '\t' ||
+           char_atual == '\r' || char_atual == '\n') {
+        if (char_atual == '\n') contaLinha++;
+        proximo_char();
+    }
+}
+
+/*
+obter_atomo()
+Reconhece e retorna o próximo token do arquivo fonte,
+lendo caractere por caractere com fgetc().
+*/
 TInfoAtomo obter_atomo(void) {
     TInfoAtomo info;
     memset(&info, 0, sizeof(TInfoAtomo));
 
-    // Pula espaços, tabs e novas linhas
-    while (*entrada == ' '  || *entrada == '\t' ||
-           *entrada == '\r' || *entrada == '\n') {
-        if (*entrada == '\n') contaLinha++;
-        entrada++;
-    }
+    pula_espacos();
 
     info.linha = contaLinha;
 
     // Fim de arquivo
-    if (*entrada == '\0') {
+    if (char_atual == EOF) {
         info.atomo = FIM_DE_ARQUIVO;
         return info;
     }
 
-    // COMENTARIO -> #[^\n]*  (ignora até fim da linha)
-    if (*entrada == '#') {
+    // COMENTARIO -> #[^\n]*
+    if (char_atual == '#') {
         return reconhece_comentario_hash();
     }
 
     // ID -> [A-Za-z_][A-Za-z0-9_]*  e palavras reservadas
-    if (isalpha((unsigned char)*entrada) || *entrada == '_') {
+    if (isalpha((unsigned char)char_atual) || char_atual == '_') {
         return reconhece_id_ou_palavra_reservada();
     }
 
     // NUM -> [0-9]+
-    if (isdigit((unsigned char)*entrada)) {
+    if (isdigit((unsigned char)char_atual)) {
         return reconhece_numero();
     }
 
     // STRING -> "[^"\n]*"  (somente aspas duplas, conforme regex do grupo)
-    if (*entrada == '"') {
+    if (char_atual == '"') {
         return reconhece_string();
     }
 
-    // Operadores e delimitadores
-    switch (*entrada) {
+    // Operadores e Delimitadores (lidos caractere a caractere)
+    switch (char_atual) {
 
         // Operadores aritméticos
-        case '+': entrada++; info.atomo = OP_MAIS;  return info;
-        case '-': entrada++; info.atomo = OP_MENOS; return info;
-        case '~': entrada++; info.atomo = OP_TIL;   return info;
-        case '/': entrada++; info.atomo = OP_DIV;   return info;
-        case '%': entrada++; info.atomo = OP_MOD;   return info;
+        case '+': proximo_char(); info.atomo = OP_MAIS;  return info;
+        case '-': proximo_char(); info.atomo = OP_MENOS; return info;
+        case '~': proximo_char(); info.atomo = OP_TIL;   return info;
+        case '/': proximo_char(); info.atomo = OP_DIV;   return info;
+        case '%': proximo_char(); info.atomo = OP_MOD;   return info;
 
         case '*':
-            entrada++;
-            if (*entrada == '*') { entrada++; info.atomo = OP_POT;  }
-            else                 {            info.atomo = OP_MULT; }
+            proximo_char();
+            if (char_atual == '*') { proximo_char(); info.atomo = OP_POT;  }
+            else                   {                 info.atomo = OP_MULT; }
             return info;
 
         // Operadores relacionais e atribuição
         case '=':
-            entrada++;
-            if (*entrada == '=') { entrada++; info.atomo = OP_IGUAL;  }
-            else                 {            info.atomo = OP_ATRIB;  }
+            proximo_char();
+            if (char_atual == '=') { proximo_char(); info.atomo = OP_IGUAL; }
+            else                   {                 info.atomo = OP_ATRIB; }
             return info;
 
         case '!':
-            entrada++;
-            if (*entrada == '=') {
-                entrada++;
+            proximo_char();
+            if (char_atual == '=') {
+                proximo_char();
                 info.atomo = OP_DIFERENTE;
             } else {
                 info.atomo = ERRO_LEXICO;
@@ -385,62 +538,67 @@ TInfoAtomo obter_atomo(void) {
             return info;
 
         case '<':
-            entrada++;
-            if      (*entrada == '=') { entrada++; info.atomo = OP_MENOR_IGUAL; }
-            else if (*entrada == '>') { entrada++; info.atomo = OP_DIFERENTE2;  }
-            else                     {             info.atomo = OP_MENOR;       }
+            proximo_char();
+            if      (char_atual == '=') { proximo_char(); info.atomo = OP_MENOR_IGUAL; }
+            else if (char_atual == '>') { proximo_char(); info.atomo = OP_DIFERENTE2;  }
+            else                        {                 info.atomo = OP_MENOR;       }
             return info;
 
         case '>':
-            entrada++;
-            if (*entrada == '=') { entrada++; info.atomo = OP_MAIOR_IGUAL; }
-            else                 {            info.atomo = OP_MAIOR;       }
+            proximo_char();
+            if (char_atual == '=') { proximo_char(); info.atomo = OP_MAIOR_IGUAL; }
+            else                   {                 info.atomo = OP_MAIOR;       }
             return info;
 
         // Delimitadores
-        case '(': entrada++; info.atomo = DEL_ABRE_PAR;      return info;
-        case ')': entrada++; info.atomo = DEL_FECHA_PAR;     return info;
-        case '[': entrada++; info.atomo = DEL_ABRE_COL;      return info;
-        case ']': entrada++; info.atomo = DEL_FECHA_COL;     return info;
-        case '{': entrada++; info.atomo = DEL_ABRE_CHAVE;    return info;
-        case '}': entrada++; info.atomo = DEL_FECHA_CHAVE;   return info;
-        case ',': entrada++; info.atomo = DEL_VIRGULA;       return info;
-        case ':': entrada++; info.atomo = DEL_DOIS_PONTOS;   return info;
-        case '.': entrada++; info.atomo = DEL_PONTO;         return info;
-        case ';': entrada++; info.atomo = DEL_PONTO_VIRGULA; return info;
+        case '(': proximo_char(); info.atomo = DEL_ABRE_PAR;      return info;
+        case ')': proximo_char(); info.atomo = DEL_FECHA_PAR;     return info;
+        case '[': proximo_char(); info.atomo = DEL_ABRE_COL;      return info;
+        case ']': proximo_char(); info.atomo = DEL_FECHA_COL;     return info;
+        case '{': proximo_char(); info.atomo = DEL_ABRE_CHAVE;    return info;
+        case '}': proximo_char(); info.atomo = DEL_FECHA_CHAVE;   return info;
+        case ',': proximo_char(); info.atomo = DEL_VIRGULA;       return info;
+        case ':': proximo_char(); info.atomo = DEL_DOIS_PONTOS;   return info;
+        case '.': proximo_char(); info.atomo = DEL_PONTO;         return info;
+        case ';': proximo_char(); info.atomo = DEL_PONTO_VIRGULA; return info;
 
         default:
             info.atomo = ERRO_LEXICO;
             snprintf(info.lexema, sizeof(info.lexema),
-                     "Caractere invalido '%c'", *entrada);
-            entrada++;
+                     "Caractere invalido '%c'", (char)char_atual);
+            proximo_char();
             return info;
     }
 }
 
 // reconhece_comentario_hash() — COMENTARIO -> #[^\n]*
 TInfoAtomo reconhece_comentario_hash(void) {
-    while (*entrada != '\n' && *entrada != '\0') {
-        entrada++;
+    // Consome do '#' até antes do '\n' ou EOF
+    while (char_atual != '\n' && char_atual != EOF) {
+        proximo_char();
     }
-    return obter_atomo();
+    return obter_atomo(); // retorna o próximo token real
 }
 
-// reconhece_id_ou_palavra_reservada() — ID -> [A-Za-z_][A-Za-z0-9_]*
+/*
+reconhece_id_ou_palavra_reservada()
+Lê [A-Za-z_][A-Za-z0-9_]* caractere a caractere.
+Verifica se é palavra reservada ou identificador.
+Identificadores são registrados na tabela de símbolos.
+*/
 TInfoAtomo reconhece_id_ou_palavra_reservada(void) {
     TInfoAtomo info;
     memset(&info, 0, sizeof(TInfoAtomo));
     info.linha = contaLinha;
 
-    char *inicio = entrada;
-    while (isalnum((unsigned char)*entrada) || *entrada == '_') {
-        entrada++;
+    int idx = 0;
+    // Consome [A-Za-z0-9_]* caractere a caractere
+    while (isalnum((unsigned char)char_atual) || char_atual == '_') {
+        if (idx < (int)sizeof(info.lexema) - 1)
+            info.lexema[idx++] = (char)char_atual;
+        proximo_char();
     }
-
-    int tam = (int)(entrada - inicio);
-    if (tam >= (int)sizeof(info.lexema)) tam = (int)sizeof(info.lexema) - 1;
-    strncpy(info.lexema, inicio, tam);
-    info.lexema[tam] = '\0';
+    info.lexema[idx] = '\0';
 
     // Mapeamento das palavras reservadas (case-sensitive)
     if      (strcmp(info.lexema, "if")       == 0) info.atomo = KW_IF;
@@ -468,63 +626,95 @@ TInfoAtomo reconhece_id_ou_palavra_reservada(void) {
     else if (strcmp(info.lexema, "not")      == 0) info.atomo = KW_NOT;
     else if (strcmp(info.lexema, "in")       == 0) info.atomo = KW_IN;
     else if (strcmp(info.lexema, "is")       == 0) info.atomo = KW_IS;
-    else    info.atomo = IDENTIFICADOR;
+    else {
+        // Identificador: registra na tabela de símbolos
+        info.atomo      = IDENTIFICADOR;
+        info.id_simbolo = busca_ou_insere(info.lexema);
+    }
 
     return info;
 }
 
-// reconhece_numero() — NUM -> [0-9]+
+/*
+reconhece_numero()
+Lê [0-9]+ caractere a caractere.
+Erro léxico se seguido de letra ou '_' (ex: 12Val).
+*/
 TInfoAtomo reconhece_numero(void) {
     TInfoAtomo info;
     memset(&info, 0, sizeof(TInfoAtomo));
     info.linha = contaLinha;
     info.atomo = NUMERO;
 
-    char *inicio = entrada;
-    while (isdigit((unsigned char)*entrada)) {
-        entrada++;
+    int idx = 0;
+    // Consome dígitos: [0-9]+
+    while (isdigit((unsigned char)char_atual)) {
+        if (idx < (int)sizeof(info.lexema) - 1)
+            info.lexema[idx++] = (char)char_atual;
+        proximo_char();
     }
+    info.lexema[idx] = '\0';
 
-    // Erro léxico: token inválido como "12Val"
-    if (isalpha((unsigned char)*entrada) || *entrada == '_') {
+    // Erro lexico: numero real (ex: 0.0) nao e suportado — so inteiros
+    if (char_atual == '.') {
         info.atomo = ERRO_LEXICO;
-        while (isalnum((unsigned char)*entrada) || *entrada == '_') {
-            entrada++;
+        // Consome o '.' e os digitos seguintes para montar o lexema completo
+        char tmp[256];
+        strncpy(tmp, info.lexema, idx);
+        int t = idx;
+        tmp[t++] = '.';
+        proximo_char(); // consome o '.'
+        while (isdigit((unsigned char)char_atual)) {
+            if (t < 200) tmp[t++] = (char)char_atual;
+            proximo_char();
         }
-        int tam = (int)(entrada - inicio);
-        if (tam > 100) tam = 100;
-        char tmp[128];
-        strncpy(tmp, inicio, tam);
-        tmp[tam] = '\0';
-        snprintf(info.lexema, sizeof(info.lexema), "ID invalido '%s'", tmp);
+        tmp[t] = '\0';
+        snprintf(info.lexema, 220,
+                 "Numero real '%.150s' nao e suportado. Apenas inteiros sao permitidos.", tmp);
         return info;
     }
 
-    int tam = (int)(entrada - inicio);
-    if (tam >= (int)sizeof(info.lexema)) tam = (int)sizeof(info.lexema) - 1;
-    strncpy(info.lexema, inicio, tam);
-    info.lexema[tam] = '\0';
+    // Erro lexico: token invalido como "12Val"
+    if (isalpha((unsigned char)char_atual) || char_atual == '_') {
+        info.atomo = ERRO_LEXICO;
+        char tmp[256];
+        strncpy(tmp, info.lexema, idx);
+        tmp[idx] = '\0';
+        int t = idx;
+        while (isalnum((unsigned char)char_atual) || char_atual == '_') {
+            if (t < 100) tmp[t++] = (char)char_atual;
+            proximo_char();
+        }
+        tmp[t] = '\0';
+        snprintf(info.lexema, 220, "ID invalido '%.200s'", tmp);
+    }
+
     return info;
 }
 
-// reconhece_string() — STRING -> "[^"\n]*"  (somente aspas duplas)
+/*
+reconhece_string()
+Lê "[^"\n]*" caractere a caractere.
+Somente aspas duplas (conforme regex do grupo).
+Erro léxico se não fechar na mesma linha.
+*/
 TInfoAtomo reconhece_string(void) {
     TInfoAtomo info;
     memset(&info, 0, sizeof(TInfoAtomo));
     info.linha = contaLinha;
 
-    entrada++; // Pula a aspas dupla de abertura
+    proximo_char(); // Consome a aspas dupla de abertura '"'
 
     int idx = 0;
-    // Consome [^"\n]* — qualquer char exceto '"' e '\n'
-    while (*entrada != '\0' && *entrada != '\n' && *entrada != '"') {
+    // Lê [^"\n]* caractere a caractere
+    while (char_atual != EOF && char_atual != '\n' && char_atual != '"') {
         if (idx < (int)sizeof(info.lexema) - 1)
-            info.lexema[idx++] = *entrada;
-        entrada++;
+            info.lexema[idx++] = (char)char_atual;
+        proximo_char();
     }
 
-    if (*entrada == '"') {
-        entrada++; // Pula a aspas dupla de fechamento
+    if (char_atual == '"') {
+        proximo_char(); // Consome a aspas dupla de fechamento
         info.atomo = LITERAL_STR;
         info.lexema[idx] = '\0';
         return info;
@@ -540,48 +730,92 @@ TInfoAtomo reconhece_string(void) {
 /*
 =====================
 ANALISADOR SINTÁTICO
+(trabalha sobre lista_tokens[] produzida pelo léxico)
 =====================
 */
 
-void erro_lexico(const char *msg) {
-    printf("\n# ERRO LEXICO na linha %d: %s\n", lookahead.linha, msg);
-    free(inicio_buffer);
-    exit(1);
+// token_atual() — retorna o token na posição corrente da lista
+TInfoAtomo token_atual(void) {
+    if (pos_token < total_tokens)
+        return lista_tokens[pos_token];
+    return lista_tokens[total_tokens - 1]; // último é sempre FIM_DE_ARQUIVO
 }
 
+/*
+erro_sintatico(esperado)
+Informa qual token era esperado e qual foi encontrado.
+Quando o token encontrado e FIM_DE_ARQUIVO, usa a linha do
+ultimo token consumido — assim o erro aponta para a linha
+onde o simbolo faltante deveria ter aparecido.
+*/
 void erro_sintatico(TAtomo esperado) {
+    TInfoAtomo t = token_atual();
+
+    // Determina a linha correta do erro:
+    // Se o token inesperado esta em linha posterior ao ultimo token consumido
+    // (ou e FIM_DE_ARQUIVO), reporta a linha do ultimo token consumido,
+    // pois e la que o simbolo esperado deveria ter aparecido.
+    int linha_erro = t.linha;
+    if (pos_token > 0) {
+        int linha_anterior = lista_tokens[pos_token - 1].linha;
+        if (t.atomo == FIM_DE_ARQUIVO || t.linha > linha_anterior) {
+            linha_erro = linha_anterior;
+        }
+    }
+
     printf("\n# ERRO SINTATICO na linha %d: Esperado '%s', mas encontrado '%s'",
-           lookahead.linha, strAtomo[esperado], strAtomo[lookahead.atomo]);
-    if (lookahead.atomo == IDENTIFICADOR || lookahead.atomo == NUMERO)
-        printf(" ('%s')", lookahead.lexema);
+           linha_erro, strAtomo[esperado], strAtomo[t.atomo]);
+    if (t.atomo == IDENTIFICADOR || t.atomo == NUMERO)
+        printf(" ('%s')", t.lexema);
     printf("\n");
-    free(inicio_buffer);
     exit(1);
 }
 
 void erro_geral(const char *msg) {
-    printf("\n# ERRO na linha %d: %s\n", lookahead.linha, msg);
-    free(inicio_buffer);
+    TInfoAtomo t = token_atual();
+    printf("\n# ERRO na linha %d: %s\n", t.linha, msg);
     exit(1);
 }
 
 /*
 consome(atomo)
-Verifica o lookahead, imprime e avança para o próximo token
+Verifica se o token atual é o esperado.
+Se sim: imprime no formato correto e avança para o próximo token.
+Se não: chama erro_sintatico() com o token esperado.
 */
 void consome(TAtomo atomo) {
-    if (lookahead.atomo == ERRO_LEXICO) {
-        erro_lexico(lookahead.lexema);
-    }
-    if (lookahead.atomo == atomo) {
-        printf("%d %s", lookahead.linha, strAtomo[lookahead.atomo]);
-        if (lookahead.atomo == IDENTIFICADOR ||
-            lookahead.atomo == NUMERO        ||
-            lookahead.atomo == LITERAL_STR) {
-            printf(" | %s", lookahead.lexema);
+    TInfoAtomo t = token_atual();
+
+    if (t.atomo == atomo) {
+        // Imprime conforme a classe do token
+        switch (t.atomo) {
+            case IDENTIFICADOR:
+                printf("%d IDENTIFICADOR | %s | id=%d\n",
+                       t.linha, t.lexema, t.id_simbolo);
+                break;
+            case NUMERO:
+                printf("%d NUMERO | %s\n", t.linha, t.lexema);
+                break;
+            case LITERAL_STR:
+                printf("%d LITERAL_STRING | %s\n", t.linha, t.lexema);
+                break;
+            case DEL_ABRE_PAR:
+            case DEL_FECHA_PAR:
+            case DEL_ABRE_COL:
+            case DEL_FECHA_COL:
+            case DEL_ABRE_CHAVE:
+            case DEL_FECHA_CHAVE:
+            case DEL_VIRGULA:
+            case DEL_DOIS_PONTOS:
+            case DEL_PONTO:
+            case DEL_PONTO_VIRGULA:
+                printf("%d DELIMITADOR | %s\n", t.linha, strAtomo[t.atomo]);
+                break;
+            default:
+                printf("%d %s\n", t.linha, strAtomo[t.atomo]);
+                break;
         }
-        printf("\n");
-        lookahead = obter_atomo();
+        pos_token++;
     } else {
         erro_sintatico(atomo);
     }
@@ -593,9 +827,9 @@ GRAMÁTICA MINIPYTHON
 ===================
 */
 
-// is_inicio_fator() — retorna 1 se o lookahead pode iniciar um FATOR
+// is_inicio_fator() — retorna 1 se o token atual pode iniciar um FATOR
 int is_inicio_fator(void) {
-    switch (lookahead.atomo) {
+    switch (token_atual().atomo) {
         case IDENTIFICADOR:
         case NUMERO:
         case LITERAL_STR:
@@ -613,10 +847,10 @@ int is_inicio_fator(void) {
     }
 }
 
-// is_inicio_comando() — retorna 1 se o lookahead pode iniciar um COMANDO
+// is_inicio_comando() — retorna 1 se o token atual pode iniciar um COMANDO
 int is_inicio_comando(void) {
-    switch (lookahead.atomo) {
-        case IDENTIFICADOR: // ATRIBUICAO -> ID = EXPRESSAO
+    switch (token_atual().atomo) {
+        case IDENTIFICADOR:
         case KW_IF:
         case KW_WHILE:
         case KW_FOR:
@@ -627,9 +861,9 @@ int is_inicio_comando(void) {
     }
 }
 
-// is_op_rel() — retorna 1 se o lookahead é um operador relacional
+// is_op_rel() — retorna 1 se o token atual é um operador relacional
 int is_op_rel(void) {
-    switch (lookahead.atomo) {
+    switch (token_atual().atomo) {
         case OP_MENOR:       case OP_MAIOR:
         case OP_DIFERENTE:   case OP_DIFERENTE2:
         case OP_IGUAL:       case OP_MENOR_IGUAL:
@@ -648,19 +882,14 @@ void programa(void) {
 
 // LISTA_COMANDOS -> COMANDO LISTA_COMANDOS | ε
 void lista_comandos(void) {
-    if (lookahead.atomo == ERRO_LEXICO) erro_lexico(lookahead.lexema);
-
     while (is_inicio_comando()) {
         comando();
-        if (lookahead.atomo == ERRO_LEXICO) erro_lexico(lookahead.lexema);
     }
-
-    if (lookahead.atomo == ERRO_LEXICO) erro_lexico(lookahead.lexema);
 }
 
 // COMANDO -> ATRIBUICAO | IF | WHILE | FOR | PRINT
 void comando(void) {
-    switch (lookahead.atomo) {
+    switch (token_atual().atomo) {
         case IDENTIFICADOR: atribuicao(); break;
         case KW_IF:         cmd_if();     break;
         case KW_WHILE:      cmd_while();  break;
@@ -689,7 +918,7 @@ void cmd_if(void) {
 
 // ELSE_OPC -> else : COMANDO | ε
 void else_opc(void) {
-    if (lookahead.atomo == KW_ELSE) {
+    if (token_atual().atomo == KW_ELSE) {
         consome(KW_ELSE);
         consome(DEL_DOIS_PONTOS);
         comando();
@@ -733,7 +962,7 @@ void lista_exp(void) {
 
 // RESTO_LISTA -> , EXPRESSAO RESTO_LISTA | ε
 void resto_lista(void) {
-    if (lookahead.atomo == DEL_VIRGULA) {
+    if (token_atual().atomo == DEL_VIRGULA) {
         consome(DEL_VIRGULA);
         expressao();
         resto_lista();
@@ -771,11 +1000,11 @@ void expressao_logica(void) {
 
 // RESTO_LOGICO -> and EXPRESSAO_REL RESTO_LOGICO | or EXPRESSAO_REL RESTO_LOGICO | ε
 void resto_logico(void) {
-    if (lookahead.atomo == KW_AND) {
+    if (token_atual().atomo == KW_AND) {
         consome(KW_AND);
         expressao_rel();
         resto_logico();
-    } else if (lookahead.atomo == KW_OR) {
+    } else if (token_atual().atomo == KW_OR) {
         consome(KW_OR);
         expressao_rel();
         resto_logico();
@@ -792,7 +1021,7 @@ void expressao_rel(void) {
 // RESTO_REL -> OP_REL EXPRESSAO_ARIT | in EXPRESSAO_ARIT | is EXPRESSAO_ARIT | ε
 void resto_rel(void) {
     if (is_op_rel()) {
-        consome(lookahead.atomo);
+        consome(token_atual().atomo);
         expressao_arit();
     }
     // ε: nenhuma ação
@@ -806,11 +1035,11 @@ void expressao_arit(void) {
 
 // RESTO_ARIT -> + TERMO RESTO_ARIT | - TERMO RESTO_ARIT | ε
 void resto_arit(void) {
-    if (lookahead.atomo == OP_MAIS) {
+    if (token_atual().atomo == OP_MAIS) {
         consome(OP_MAIS);
         termo();
         resto_arit();
-    } else if (lookahead.atomo == OP_MENOS) {
+    } else if (token_atual().atomo == OP_MENOS) {
         consome(OP_MENOS);
         termo();
         resto_arit();
@@ -824,21 +1053,21 @@ void termo(void) {
     resto_termo();
 }
 
-// RESTO_TERMO -> * FATOR RESTO_TERMO | / FATOR RESTO_TERMO | % FATOR RESTO_TERMO | ** FATOR RESTO_TERMO | ε
+// RESTO_TERMO -> ** | * | / | % FATOR RESTO_TERMO | ε
 void resto_termo(void) {
-    if (lookahead.atomo == OP_POT) {
+    if (token_atual().atomo == OP_POT) {
         consome(OP_POT);
         fator();
         resto_termo();
-    } else if (lookahead.atomo == OP_MULT) {
+    } else if (token_atual().atomo == OP_MULT) {
         consome(OP_MULT);
         fator();
         resto_termo();
-    } else if (lookahead.atomo == OP_DIV) {
+    } else if (token_atual().atomo == OP_DIV) {
         consome(OP_DIV);
         fator();
         resto_termo();
-    } else if (lookahead.atomo == OP_MOD) {
+    } else if (token_atual().atomo == OP_MOD) {
         consome(OP_MOD);
         fator();
         resto_termo();
@@ -860,21 +1089,18 @@ Extensões práticas:
   - [expr, ...] lista literal: v = [1, 2, 3]
 */
 void fator(void) {
-    // Intercepta erro léxico pendente antes do switch
-    if (lookahead.atomo == ERRO_LEXICO) erro_lexico(lookahead.lexema);
-
-    switch (lookahead.atomo) {
+    switch (token_atual().atomo) {
 
         case IDENTIFICADOR:
             consome(IDENTIFICADOR);
             // Trailer: chamada de função ID(args)
-            if (lookahead.atomo == DEL_ABRE_PAR) {
+            if (token_atual().atomo == DEL_ABRE_PAR) {
                 consome(DEL_ABRE_PAR);
                 if (is_inicio_fator()) lista_exp();
                 consome(DEL_FECHA_PAR);
             }
             // Trailer: acesso a lista ID[expr]
-            if (lookahead.atomo == DEL_ABRE_COL) {
+            if (token_atual().atomo == DEL_ABRE_COL) {
                 consome(DEL_ABRE_COL);
                 expressao();
                 consome(DEL_FECHA_COL);
